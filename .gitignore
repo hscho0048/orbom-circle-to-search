@@ -1,6 +1,23 @@
+# Build output (installers are published as GitHub Releases instead)
 /target/
 /dist/
 
 # Local AI agent tooling, not part of the app
 /.agents/
+/.claude/
 /skills-lock.json
+
+# Editors
+/.vscode/
+/.idea/
+*.swp
+*~
+
+# OS files
+Thumbs.db
+desktop.ini
+.DS_Store
+
+# Crash dumps and logs
+*.dmp
+*.log
