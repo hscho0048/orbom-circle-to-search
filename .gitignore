@@ -1,0 +1,6 @@
+/target/
+/dist/
+
+# Local AI agent tooling, not part of the app
+/.agents/
+/skills-lock.json
