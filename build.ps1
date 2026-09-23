@@ -7,7 +7,7 @@ $originalPayload = $env:ORBOM_EXE
 
 function Use-Arm64Toolchain {
     $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
-    $installation = & $vswhere -latest -products '*' -property installationPath
+    $installation = & $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.ARM64 -property installationPath
     if (-not $installation) { throw 'Visual Studio C++ Build Tools is required.' }
     $msvc = Get-ChildItem (Join-Path $installation 'VC\Tools\MSVC') -Directory | Sort-Object Name -Descending | Select-Object -First 1
     $sdk = Get-ChildItem (Join-Path ${env:ProgramFiles(x86)} 'Windows Kits\10\Lib') -Directory | Sort-Object Name -Descending | Select-Object -First 1

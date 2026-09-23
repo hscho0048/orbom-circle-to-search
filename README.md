@@ -45,6 +45,8 @@ Rust로 만든 Windows 화면 이미지 검색 도구입니다. 화면의 궁금
    - **키보드 바로 가기 보내기** → `Ctrl + Shift + Space` (Orbom에서 다른 단축키를 골랐다면 그 조합). 가장 빠릅니다.
    - **앱 열기** → **Orbom**. Orbom이 꺼져 있어도 켜지면서 바로 선택 화면이 열립니다.
 
+**앱 열기** 목록에는 패키지(MSIX) 앱만 나옵니다. Orbom을 목록에 넣으려면 설치 후 저장소에서 `package\register.ps1`을 한 번 실행하세요. 자체 서명 인증서를 만들어 이 PC에서 신뢰하도록 등록하므로(관리자 권한 한 번) Windows SDK가 필요합니다. `-Unregister`로 되돌립니다.
+
 펜 옆면 버튼은 Windows가 오른쪽 클릭·지우개 용도로 쓰기 때문에 앱을 할당할 수 없습니다.
 
 ### 트레이 메뉴
@@ -142,6 +144,8 @@ You can open Orbom with the shortcut button on top of a Surface Pen (the eraser 
 3. Set it to one of these:
    - **Send keyboard shortcut** → `Ctrl + Shift + Space` (or whichever shortcut you chose in Orbom). This is the fastest.
    - **Open an app** → **Orbom**. Even if Orbom isn't running, it starts and opens the selection screen right away.
+
+The **Open an app** list only shows packaged (MSIX) apps. To add Orbom to it, run `package\register.ps1` from the repository once after installing. It creates a self-signed certificate and trusts it on this PC (one administrator prompt), so it needs the Windows SDK. `-Unregister` undoes it.
 
 The pen's side (barrel) button can't be assigned to apps, because Windows uses it for right-click and erasing.
 
