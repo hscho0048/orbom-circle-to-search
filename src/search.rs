@@ -6,21 +6,26 @@ use crate::orb::{Glow, Surface};
 use base64::{Engine, engine::general_purpose::STANDARD};
 use raw_window_handle::{HasWindowHandle, RawWindowHandle, Win32WindowHandle, WindowHandle};
 use std::{
-    mem::zeroed,
+    mem::{size_of, zeroed},
     num::NonZeroIsize,
     ptr::{null, null_mut},
     time::Instant,
 };
-use webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2Settings2;
+use webview2_com::{
+    Microsoft::Web::WebView2::Win32::{COREWEBVIEW2_PERMISSION_STATE_DENY, ICoreWebView2Settings2},
+    PermissionRequestedEventHandler,
+};
 use windows::core::{Interface, PCWSTR};
 use windows_sys::Win32::{
     Foundation::*,
     Graphics::Gdi::*,
     System::LibraryLoader::GetModuleHandleW,
     UI::{
-        Controls::{DRAWITEMSTRUCT, ODS_FOCUS, ODS_SELECTED},
-        HiDpi::{GetDpiForMonitor, GetDpiForWindow, MDT_EFFECTIVE_DPI},
-        Input::KeyboardAndMouse::SetFocus,
+        Controls::{DRAWITEMSTRUCT, ODS_FOCUS, ODS_SELECTED, WM_MOUSELEAVE},
+        HiDpi::{GetDpiForMonitor, GetDpiForWindow, GetSystemMetricsForDpi, MDT_EFFECTIVE_DPI},
+        Input::KeyboardAndMouse::{
+            ReleaseCapture, SetCapture, SetFocus, TME_LEAVE, TRACKMOUSEEVENT, TrackMouseEvent,
+        },
         Shell::ShellExecuteW,
         WindowsAndMessaging::*,
     },
@@ -38,6 +43,15 @@ const RETRY: usize = 202;
 const DRAW: usize = 203;
 const CLOSE: usize = 204;
 const SUBTITLE: i32 = 205;
+/// Height of the panel's own title bar, which replaces the system caption.
+const BAR: i32 = 36;
+/// Hit box of each caption orb (minimize, maximize, close).
+const BUTTON: i32 = 28;
+/// Segoe MDL2 Assets glyphs shown on a hovered caption orb.
+const GLYPH_MINIMIZE: u16 = 0xE921;
+const GLYPH_MAXIMIZE: u16 = 0xE922;
+const GLYPH_RESTORE: u16 = 0xE923;
+const GLYPH_CLOSE: u16 = 0xE8BB;
 
 const OBSERVE_UPLOAD: &str = r#"
 (() => {
@@ -141,6 +155,10 @@ pub struct Panel {
     canvas: Option<Surface>,
     started: Instant,
     animations: bool,
+    caption: [Glow; 3],
+    glyphs: HFONT,
+    hovered: Option<usize>,
+    pressed: Option<usize>,
 }
 
 impl Panel {
@@ -232,15 +250,37 @@ impl Panel {
             0,
             wide("Malgun Gothic").as_ptr(),
         );
-        let glow = match Glow::new() {
-            Ok(glow) => glow,
+        let glyphs = CreateFontW(
+            -(8 * GetDpiForWindow(hwnd) as i32 / 96),
+            0,
+            0,
+            0,
+            400,
+            0,
+            0,
+            0,
+            DEFAULT_CHARSET as u32,
+            0,
+            0,
+            CLEARTYPE_QUALITY as u32,
+            0,
+            wide("Segoe MDL2 Assets").as_ptr(),
+        );
+        let glows = (|| Ok::<_, String>((Glow::new()?, [Glow::new()?, Glow::new()?, Glow::new()?])))();
+        let (glow, mut caption) = match glows {
+            Ok(glows) => glows,
             Err(error) => {
                 DestroyWindow(hwnd);
                 DeleteObject(font);
                 DeleteObject(heading);
+                DeleteObject(glyphs);
                 return Err(error);
             }
         };
+        // Still pastel beads from the orb's palette: yellow, mint and pink, in caption order.
+        for (orb, hue) in caption.iter_mut().zip([2.0 / 6.0, 1.0 / 6.0, 3.0 / 6.0]) {
+            orb.set_hue(hue);
+        }
         let mut panel = Box::new(Self {
             hwnd,
             main,
@@ -259,8 +299,22 @@ impl Panel {
             canvas: None,
             started: Instant::now(),
             animations: crate::orb::motion(),
+            caption,
+            glyphs,
+            hovered: None,
+            pressed: None,
         });
         SetWindowLongPtrW(hwnd, GWLP_USERDATA, &mut *panel as *mut Self as isize);
+        // Re-run WM_NCCALCSIZE now that the window proc can see the panel and drop the caption.
+        SetWindowPos(
+            hwnd,
+            null_mut(),
+            0,
+            0,
+            0,
+            0,
+            SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
+        );
         for (id, text, button) in [
             (STATUS, crate::i18n::t("이미지 찾는 중", "Searching"), false),
             (
@@ -350,6 +404,20 @@ impl Panel {
             })
             .build_as_child(&NativeWindow(hwnd))
             .map_err(|e| format!("{}\n{e}", crate::i18n::t("이미지 검색 창을 시작하지 못했습니다. Microsoft Edge WebView2 Runtime 설치를 확인해 주세요.", "Couldn't start the image search window. Please check that Microsoft Edge WebView2 Runtime is installed.")))?;
+        // Lens offers live camera search; Orbom only uploads the capture, so answer every
+        // permission prompt (camera, microphone, location...) with no instead of asking the user.
+        if let Ok(core) = view.controller().CoreWebView2() {
+            let mut token = 0;
+            let _ = core.add_PermissionRequested(
+                &PermissionRequestedEventHandler::create(Box::new(|_, args| {
+                    if let Some(args) = args {
+                        args.SetState(COREWEBVIEW2_PERMISSION_STATE_DENY)?;
+                    }
+                    Ok(())
+                })),
+                &mut token,
+            );
+        }
         panel.webview = Some(view);
         panel.resize();
         SetTimer(hwnd, 1, 20_000, None);
@@ -368,19 +436,20 @@ impl Panel {
         let mut r: RECT = zeroed();
         GetClientRect(self.hwnd, &mut r);
         let d = |n: i32| n * GetDpiForWindow(self.hwnd) as i32 / 96;
+        let bar = d(BAR);
         if self.showing_web {
             return RECT {
                 left: d(12),
-                top: d(8),
+                top: bar + d(8),
                 right: d(80),
-                bottom: d(76),
+                bottom: bar + d(76),
             };
         }
         let size = d(220)
             .min(r.right - d(32))
-            .min((r.bottom - d(180)).max(d(96)))
+            .min((r.bottom - bar - d(180)).max(d(96)))
             .max(32);
-        let top = ((r.bottom - size - d(148)) / 2).max(d(20));
+        let top = bar + ((r.bottom - bar - size - d(148)) / 2).max(d(20));
         RECT {
             left: (r.right - size) / 2,
             top,
@@ -404,8 +473,9 @@ impl Panel {
         }
         let d = |n: i32| n * GetDpiForWindow(self.hwnd) as i32 / 96;
         let orb = self.orb_rect();
+        let bar = d(BAR);
         let (left, width, title_y, body_y, buttons_y) = if self.showing_web {
-            (d(88), r.right - d(104), d(12), d(46), d(100))
+            (d(88), r.right - d(104), bar + d(12), bar + d(46), bar + d(100))
         } else {
             (
                 d(20),
@@ -454,12 +524,10 @@ impl Panel {
                 1,
             );
         }
-        let top = if self.showing_results {
-            0
-        } else if self.showing_web {
-            d(164)
+        let top = if self.showing_web && !self.showing_results {
+            bar + d(164)
         } else {
-            0
+            bar
         };
         if let Some(view) = &self.webview {
             let _ = view.set_bounds(wry::Rect {
@@ -475,31 +543,117 @@ impl Panel {
         let mut ps: PAINTSTRUCT = zeroed();
         let dc = BeginPaint(self.hwnd, &mut ps);
         let rect = self.orb_rect();
-        if !self.showing_results {
-            self.glow.update(if self.animations && !self.showing_web {
-                crate::orb::clock()
-            } else {
-                0.0
-            });
-            if let Some(canvas) = &self.canvas {
-                FillRect(canvas.dc, &ps.rcPaint, self.background);
+        if let Some(canvas) = self.canvas.as_ref().map(|c| c.dc) {
+            FillRect(canvas, &ps.rcPaint, self.background);
+            if !self.showing_results {
+                self.glow.update(if self.animations && !self.showing_web {
+                    crate::orb::clock()
+                } else {
+                    0.0
+                });
                 self.glow
-                    .draw(canvas.dc, rect.left, rect.top, rect.right - rect.left);
-                let r = ps.rcPaint;
-                BitBlt(
+                    .draw(canvas, rect.left, rect.top, rect.right - rect.left);
+            }
+            self.draw_caption(canvas);
+            let r = ps.rcPaint;
+            BitBlt(
+                dc,
+                r.left,
+                r.top,
+                r.right - r.left,
+                r.bottom - r.top,
+                canvas,
+                r.left,
+                r.top,
+                SRCCOPY,
+            );
+        }
+        EndPaint(self.hwnd, &ps);
+    }
+
+    unsafe fn d(&self, n: i32) -> i32 {
+        n * GetDpiForWindow(self.hwnd) as i32 / 96
+    }
+
+    /// Hit box of caption orb `i` (0 minimize, 1 maximize, 2 close), right-aligned like Windows.
+    unsafe fn caption_button(&self, i: usize) -> RECT {
+        let mut r: RECT = zeroed();
+        GetClientRect(self.hwnd, &mut r);
+        let size = self.d(BUTTON);
+        // Same margin on the top and right, so the close orb sits on the corner's 45° diagonal.
+        let top = (self.d(BAR) - size) / 2;
+        let right = r.right - top - (2 - i as i32) * size;
+        RECT {
+            left: right - size,
+            top,
+            right,
+            bottom: top + size,
+        }
+    }
+
+    unsafe fn caption_hit(&self, x: i32, y: i32) -> Option<usize> {
+        (0..3).find(|&i| PtInRect(&self.caption_button(i), POINT { x, y }) != 0)
+    }
+
+    unsafe fn invalidate_caption(&self) {
+        let mut r: RECT = zeroed();
+        GetClientRect(self.hwnd, &mut r);
+        r.bottom = self.d(BAR);
+        InvalidateRect(self.hwnd, &r, 0);
+    }
+
+    /// The title and the three pastel orbs that stand in for minimize, maximize and close.
+    unsafe fn draw_caption(&mut self, dc: HDC) {
+        let bar = self.d(BAR);
+        let mut title = [0u16; 128];
+        GetWindowTextW(self.hwnd, title.as_mut_ptr(), title.len() as i32);
+        let old = SelectObject(dc, self.font);
+        SetBkMode(dc, TRANSPARENT as i32);
+        SetTextColor(dc, 0x00908078);
+        let mut text = RECT {
+            left: self.d(14),
+            top: 0,
+            right: self.caption_button(0).left,
+            bottom: bar,
+        };
+        DrawTextW(
+            dc,
+            title.as_ptr(),
+            -1,
+            &mut text,
+            DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS,
+        );
+        SelectObject(dc, self.glyphs);
+        SetTextColor(dc, 0x00463832);
+        let maximize = if IsZoomed(self.hwnd) != 0 {
+            GLYPH_RESTORE
+        } else {
+            GLYPH_MAXIMIZE
+        };
+        for (i, glyph) in [GLYPH_MINIMIZE, maximize, GLYPH_CLOSE].into_iter().enumerate() {
+            let mut b = self.caption_button(i);
+            let size = b.right - b.left;
+            // The bead swells a little under the pointer and shrinks while pressed.
+            let side = if self.pressed == Some(i) {
+                size * 2 / 3
+            } else if self.hovered == Some(i) {
+                size * 7 / 8
+            } else {
+                size * 3 / 4
+            };
+            let offset = (size - side) / 2;
+            self.caption[i].draw(dc, b.left + offset, b.top + offset, side);
+            if self.hovered == Some(i) || self.pressed == Some(i) {
+                DrawTextW(
                     dc,
-                    r.left,
-                    r.top,
-                    r.right - r.left,
-                    r.bottom - r.top,
-                    canvas.dc,
-                    r.left,
-                    r.top,
-                    SRCCOPY,
+                    [glyph, 0].as_ptr(),
+                    -1,
+                    &mut b,
+                    DT_CENTER | DT_VCENTER | DT_SINGLELINE,
                 );
             }
         }
-        EndPaint(self.hwnd, &ps);
+        SelectObject(dc, old);
     }
 
     unsafe fn show_error(&mut self, title: &str, detail: &str) {
@@ -580,6 +734,10 @@ impl Panel {
         let orb = self.orb_rect();
         self.glow.update(0.0);
         self.glow.draw(dc, orb.left, orb.top, orb.right - orb.left);
+        // Show the close orb hovered so the preview has both caption states.
+        self.hovered = Some(2);
+        self.draw_caption(dc);
+        self.hovered = None;
         for id in [STATUS, SUBTITLE, CLOSE as i32] {
             let child = GetDlgItem(self.hwnd, id);
             let mut rect: RECT = zeroed();
@@ -710,6 +868,7 @@ impl Drop for Panel {
             DestroyWindow(self.hwnd);
             DeleteObject(self.font);
             DeleteObject(self.heading);
+            DeleteObject(self.glyphs);
             DeleteObject(self.background);
         }
     }
@@ -721,7 +880,90 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPAR
         return DefWindowProcW(hwnd, msg, wp, lp);
     }
     let panel = &mut *ptr;
+    let point = || POINT {
+        x: (lp & 0xffff) as i16 as i32,
+        y: ((lp >> 16) & 0xffff) as i16 as i32,
+    };
     match msg {
+        WM_NCCALCSIZE if wp != 0 => {
+            // Keep the resizable side and bottom borders but give the caption to the client area,
+            // where the panel draws its own. A maximized window hangs its frame off-screen, so
+            // push the top back in by that much.
+            let params = &mut *(lp as *mut NCCALCSIZE_PARAMS);
+            let top = params.rgrc[0].top;
+            DefWindowProcW(hwnd, msg, wp, lp);
+            params.rgrc[0].top = top;
+            if IsZoomed(hwnd) != 0 {
+                let dpi = GetDpiForWindow(hwnd);
+                params.rgrc[0].top += GetSystemMetricsForDpi(SM_CYFRAME, dpi)
+                    + GetSystemMetricsForDpi(SM_CXPADDEDBORDER, dpi);
+            }
+            0
+        }
+        WM_NCHITTEST => {
+            let hit = DefWindowProcW(hwnd, msg, wp, lp);
+            if hit != HTCLIENT as isize {
+                return hit;
+            }
+            let mut p = point();
+            ScreenToClient(hwnd, &mut p);
+            if IsZoomed(hwnd) == 0
+                && p.y < GetSystemMetricsForDpi(SM_CYFRAME, GetDpiForWindow(hwnd))
+            {
+                HTTOP as isize
+            } else if p.y < panel.d(BAR) && panel.caption_hit(p.x, p.y).is_none() {
+                HTCAPTION as isize
+            } else {
+                HTCLIENT as isize
+            }
+        }
+        WM_MOUSEMOVE => {
+            let p = point();
+            let hit = panel.caption_hit(p.x, p.y);
+            if hit != panel.hovered {
+                panel.hovered = hit;
+                panel.invalidate_caption();
+                let mut track = TRACKMOUSEEVENT {
+                    cbSize: size_of::<TRACKMOUSEEVENT>() as u32,
+                    dwFlags: TME_LEAVE,
+                    hwndTrack: hwnd,
+                    dwHoverTime: 0,
+                };
+                TrackMouseEvent(&mut track);
+            }
+            0
+        }
+        WM_MOUSELEAVE => {
+            panel.hovered = None;
+            panel.invalidate_caption();
+            0
+        }
+        WM_LBUTTONDOWN => {
+            let p = point();
+            if let Some(i) = panel.caption_hit(p.x, p.y) {
+                panel.pressed = Some(i);
+                SetCapture(hwnd);
+                panel.invalidate_caption();
+            }
+            0
+        }
+        WM_LBUTTONUP => {
+            if let Some(i) = panel.pressed.take() {
+                ReleaseCapture();
+                panel.invalidate_caption();
+                let p = point();
+                if panel.caption_hit(p.x, p.y) == Some(i) {
+                    let command = match i {
+                        0 => SC_MINIMIZE,
+                        1 if IsZoomed(hwnd) != 0 => SC_RESTORE,
+                        1 => SC_MAXIMIZE,
+                        _ => SC_CLOSE,
+                    };
+                    PostMessageW(hwnd, WM_SYSCOMMAND, command as usize, 0);
+                }
+            }
+            0
+        }
         WM_PAINT => {
             panel.paint();
             0
@@ -885,6 +1127,7 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPAR
                     ))
                     .as_ptr(),
                 );
+                panel.invalidate_caption();
                 if let Some(view) = &panel.webview {
                     let _ = view.set_visible(true);
                     let _ = view.focus();

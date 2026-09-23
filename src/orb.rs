@@ -203,6 +203,11 @@ impl Glow {
         self.phase = phase_at(seconds);
     }
 
+    /// Holds the orb still at palette position `t` (0..1, see `art::PALETTE`).
+    pub fn set_hue(&mut self, t: f32) {
+        self.phase = t / crate::art::orb_hue(1.0);
+    }
+
     /// Renders the current phase at `size` pixels unless the source surface already holds it.
     unsafe fn render(&mut self, size: i32) -> Option<&Surface> {
         let size = size.max(1);
