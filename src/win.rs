@@ -1288,7 +1288,12 @@ unsafe extern "system" fn overlay_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPA
         }
         WM_LBUTTONDOWN | WM_MOUSEMOVE | WM_LBUTTONUP => {
             // Touch/pen can synthesize mouse events. Handle the pointer stream only once.
-            if GetMessageExtraInfo() as usize & 0xffffff00 == 0xff515700 {
+            // Some promoted messages arrive without that signature (seen on the first stroke after
+            // launch) and carry the stale cursor spot where the pen landed, which fans the ink out
+            // from that point; while a pointer owns the stroke, no mouse message may touch it.
+            if GetMessageExtraInfo() as usize & 0xffffff00 == 0xff515700
+                || app.session.as_ref().is_some_and(|s| s.pointer.is_some())
+            {
                 return 0;
             }
             let p = Point {

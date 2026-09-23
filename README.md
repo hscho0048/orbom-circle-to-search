@@ -14,7 +14,7 @@ Rust로 만든 Windows 화면 이미지 검색 도구입니다. 화면의 궁금
 
 ### 설치와 제거
 
-`dist` 폴더의 설치 파일을 실행합니다. 관리자 권한은 필요 없고, 별도 런타임 설치도 필요 없습니다.
+[Releases](https://github.com/hscho0048/orbom-circle-to-search/releases)에서 설치 파일을 받아 실행합니다(직접 빌드했다면 `dist` 폴더). 관리자 권한은 필요 없고, 별도 런타임 설치도 필요 없습니다.
 
 - `Orbom-Setup-x64.exe`: 일반 Intel/AMD PC
 - `Orbom-Setup-arm64.exe`: ARM64 Windows PC (Snapdragon 등)
@@ -70,6 +70,7 @@ Google Lens의 일반 웹 이미지 업로드 화면에 선택 이미지를 전�
 - 확인·복사·붙여넣기·임시 이미지 호스팅 단계가 없습니다.
 - 원을 감싸는 **사각형 영역 전체**를 PNG로 만들어 Google에 보냅니다. 원 바깥의 모서리 부분도 포함됩니다.
 - 캡처 이미지를 파일로 저장하지 않으며, 캡처 메모리는 사용 후 지웁니다. WebView2 프로필은 `%LOCALAPPDATA%\Orbom\WebView2`에 저장되며, Google 서비스와 브라우저의 데이터 보관 정책이 적용됩니다.
+- 검색 창의 웹페이지가 요청하는 카메라·마이크·위치 등 권한은 묻지 않고 모두 거절합니다.
 - 인증·동의·네트워크 오류는 Google 웹 화면에서 확인할 수 있고, 연결에 실패하면 다시 시도할 수 있습니다. Google의 웹 업로드 화면이 바뀌면 연동을 수정해야 할 수 있습니다.
 
 ### 빌드
@@ -114,7 +115,7 @@ The on-screen launch button and the loading screen share the same glass-bead orb
 
 ### Install and uninstall
 
-Run an installer from the `dist` folder. No administrator rights or extra runtimes are needed.
+Download an installer from [Releases](https://github.com/hscho0048/orbom-circle-to-search/releases) and run it (or use the `dist` folder if you built it yourself). No administrator rights or extra runtimes are needed.
 
 - `Orbom-Setup-x64.exe`: regular Intel/AMD PCs
 - `Orbom-Setup-arm64.exe`: ARM64 Windows PCs (Snapdragon and others)
@@ -170,6 +171,7 @@ Orbom hands the selected image to Google Lens's regular web upload page. Only af
 - There are no confirm, copy, paste or temporary image hosting steps.
 - The **whole rectangle** around your circle is sent to Google as a PNG, including the corners outside the circle.
 - Captures are never saved to disk, and capture memory is wiped after use. The WebView2 profile lives in `%LOCALAPPDATA%\Orbom\WebView2` and is subject to Google's and the browser's data retention policies.
+- Permission requests from the page in the search window (camera, microphone, location and so on) are always denied without asking.
 - Sign-in, consent and network errors show up in the Google page, and you can retry if the connection fails. If Google changes its web upload page, the integration may need updating.
 
 ### Building
