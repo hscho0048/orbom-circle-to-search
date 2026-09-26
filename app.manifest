@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
-  <assemblyIdentity version="0.1.0.0" processorArchitecture="*" name="Orbom.Desktop" type="win32"/>
+  <assemblyIdentity version="0.1.1.0" processorArchitecture="*" name="Orbom.Desktop" type="win32"/>
   <description>Orbom visual search</description>
   <!-- Matches package\AppxManifest.xml; ignored unless package\register.ps1 has registered it. -->
   <msix xmlns="urn:schemas-microsoft-com:msix.v1" publisher="CN=Orbom Local" packageName="Orbom" applicationId="Orbom"/>

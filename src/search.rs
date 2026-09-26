@@ -188,8 +188,9 @@ impl Panel {
         );
         let width = (monitor.right - monitor.left).min(440 * dpi_x as i32 / 96);
         let height = monitor.bottom - monitor.top;
+        // Always on top, like the selection overlay, so the results never open behind other windows.
         let hwnd = CreateWindowExW(
-            WS_EX_APPWINDOW,
+            WS_EX_APPWINDOW | WS_EX_TOPMOST,
             name.as_ptr(),
             wide(crate::i18n::t(
                 "Orbom · 이미지 검색",
