@@ -7,7 +7,9 @@ $originalPayload = $env:ORBOM_EXE
 
 function Use-Arm64Toolchain {
     $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
+    # Prefer an install with the ARM64 C++ component; otherwise any install plus the local ARM64 CRT below.
     $installation = & $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.ARM64 -property installationPath
+    if (-not $installation) { $installation = & $vswhere -latest -products '*' -property installationPath }
     if (-not $installation) { throw 'Visual Studio C++ Build Tools is required.' }
     $msvc = Get-ChildItem (Join-Path $installation 'VC\Tools\MSVC') -Directory | Sort-Object Name -Descending | Select-Object -First 1
     $sdk = Get-ChildItem (Join-Path ${env:ProgramFiles(x86)} 'Windows Kits\10\Lib') -Directory | Sort-Object Name -Descending | Select-Object -First 1
@@ -39,6 +41,13 @@ function Build-Setup([string]$arch) {
     $env:ORBOM_EXE = (Resolve-Path "$out\orbom.exe").Path
     cargo build --locked --release -p orbom-setup @targetArgs
     if ($LASTEXITCODE -ne 0) { throw "Installer build failed ($arch)." }
+    # A mislabeled installer fails with "This app can't run on your PC", so check the PE machine type.
+    $expected = @{ 'x64' = 0x8664; 'arm64' = 0xAA64 }[$arch]
+    foreach ($binary in "$out\orbom.exe", "$out\orbom-setup.exe") {
+        $bytes = [IO.File]::ReadAllBytes((Resolve-Path $binary))
+        $machine = [BitConverter]::ToUInt16($bytes, [BitConverter]::ToInt32($bytes, 0x3C) + 4)
+        if ($machine -ne $expected) { throw ('{0} is machine 0x{1:X4}, expected {2}.' -f $binary, $machine, $arch) }
+    }
     New-Item -ItemType Directory -Path 'dist' -Force | Out-Null
     $setup = "dist\Orbom-Setup-$arch.exe"
     Copy-Item -LiteralPath "$out\orbom-setup.exe" -Destination $setup -Force
